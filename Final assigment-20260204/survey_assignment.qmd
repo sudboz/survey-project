@@ -1,0 +1,128 @@
+---
+title: "assignment"
+format: html
+editor: visual
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+# Q) To what extent do you agree or disagree with the following statement?: “Gay, lesbian and bisexual people should have the same rights as heterosexual people”
+
+```{r}
+rm(list = ls())
+
+library(haven)
+library(tidyverse)
+library(naniar)
+library(visdat)
+library(mice)
+library(GGally)
+library(corrplot)
+library(ggcorrplot)
+library(reshape2)
+library(readr)
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(MASS)
+library(lme4)
+library(sjPlot)
+library(tidyr)
+library(patchwork)
+library(car)
+library(nnet)
+library(highcharter)
+library(scales)
+library(rpart)
+library(randomForest)
+library(pROC)
+library(xgboost)
+library(gbm)
+library(MLmetrics)
+library(smotefamily)
+library(fastDummies)
+
+```
+
+```{r}
+library(haven)
+data <- read_dta("~/Desktop/survey meth 2/Final assigment-20260204/Special Eurobarometer 493/ZA7575.dta")
+View(data)
+```
+
+data cleaning
+
+```{r}
+data_clean<- data %>%
+  mutate(across(where(is.labelled), as.numeric))
+
+data_clean <- data_clean |> 
+ dplyr::select(where(is.numeric))|>
+  dplyr::select(-c(edition,studyno1, studyno2,survey, caseid, uniqid))
+```
+
+handling missing values
+
+```{r}
+total_missing <- sum(is.na(data_clean))
+cat("Total Missing:", total_missing, "\n")
+```
+
+```{r}
+missing_per_column <- colSums(is.na(data_clean))
+
+missing_df <- data.frame(Variable = names(missing_per_column), 
+                         Missing_Count = missing_per_column, 
+                         Missing_Percentage = (missing_per_column / nrow(data)) * 100)
+
+missing_df <- missing_df[order(-missing_df$Missing_Percentage), ]
+
+
+high_missing <- missing_df[missing_df$Missing_Percentage > 50, ]
+```
+
+```{r}
+high_missing_vars <- names(missing_per_column[missing_per_column >50])
+
+data_clean <- data_clean[, !(names(data_clean) %in% high_missing_vars)]
+
+constant_vars <- names(Filter(function(x) length(unique(x)) == 1, data_clean))
+data_clean <- data_clean[, !(names(data_clean) %in% constant_vars)]
+```
+
+```{r}
+numeric_data <- data_clean[, sapply(data_clean, is.numeric)]
+
+# Identify constant columns (standard deviation = 0)
+zero_sd_vars <- sapply(numeric_data, function(x) sd(x, na.rm = TRUE) == 0)
+
+# Remove constant columns
+numeric_data <- numeric_data[, !zero_sd_vars]
+
+# Compute the correlation matrix
+cor_matrix <- cor(numeric_data, use = "pairwise.complete.obs")
+
+high_cor <- findCorrelation(cor_matrix, cutoff = 0.90) 
+
+filtered_data <- numeric_data[, -high_cor]
+```
