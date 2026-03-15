@@ -1,0 +1,382 @@
+---
+title: "Cross-National Variation in LGBT+ Rights Support in the EU"
+subtitle: "Survey Research Methodology II"
+date: "2026-02-04"
+format:
+  pdf:
+    toc: false
+    number-sections: false
+    pdf-engine: xelatex
+    mainfont: Calibri
+    fontsize: 11pt
+    linestretch: 1.5
+    geometry: "top=2cm, bottom=2cm, left=2.5cm, right=2.5cm"
+    papersize: a4
+    keep-tex: false
+header-includes:
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+  - \floatplacement{table}{H}
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r libraries}
+library(tidyverse)
+library(countrycode)
+library(lme4)
+library(broom.mixed)
+library(modelsummary)
+library(ggeffects)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(patchwork)
+
+options(kableExtra.latex.load_packages = FALSE)
+```
+
+```{r load-data}
+merged_data_dummy <- read_csv("merged_data_dummy.csv") |>
+  mutate(across(c(occupation, voice_country, sastisfaction, urban,
+                  opinion_leader, antidiscrim_eff, interview_size,
+                  fin_hardship, left_right, internet, cooperation,
+                  education, marital, religion), factor))
+```
+
+```{r load-models}
+mod_null <- readRDS("mod_null.rds")
+mod2     <- readRDS("mod2.rds")
+mod3     <- readRDS("mod3.rds")
+```
+
+```{r vpc}
+vpc <- function(model) {
+  res  <- tidy(model)
+  s2_u <- res |>
+    filter(effect == "ran_pars", group == "isocntry") |>
+    pull(estimate) |> (\(x) x^2)()
+  s2_i <- (pi^2) / 3
+  round(s2_u / (s2_u + s2_i), 2)
+}
+vpc_null <- vpc(mod_null)
+vpc_mod2 <- vpc(mod2)
+vpc_mod3 <- vpc(mod3)
+```
+
+```{r country-effects}
+mod3_res  <- tidy(mod3)
+fixed_int <- mod3_res |>
+  filter(effect == "fixed", term == "(Intercept)") |>
+  pull(estimate)
+
+country_effects <- ranef(mod3)$isocntry |>
+  as_tibble(rownames = "isocntry") |>
+  rename(u_j = `(Intercept)`) |>
+  mutate(
+    ran.int   = fixed_int + u_j,
+    declining = isocntry %in% c("BG","CZ","DK","IE","HU","IT","HR","MT","SK")
+  )
+```
+
+```{r country-macro}
+country_macro <- merged_data_dummy |>
+  dplyr::select(isocntry, lgbt_power, gdp_pc, free_expr) |>
+  distinct() |>
+  left_join(
+    country_effects |> dplyr::select(isocntry, ran.int, declining),
+    by = "isocntry"
+  )
+```
+
+# Introduction
+
+The European Commission conducted a Eurobarometer survey in 2019 focusing on discrimination within the European Union, with particular attention to the LGBTQ community and ethnic minorities. This project focuses on cross-national variation in support for equal rights for gay, lesbian, and bisexual people, contextualised against the 2015 Eurobarometer findings. Support ranges from around 31% in Slovakia to 98% in Sweden — a spread of nearly 70 percentage points. Furthermore, nine countries recorded a decline since 2015: Bulgaria, Czech Republic, Denmark, Ireland, Hungary, Italy, Croatia, Malta, and Slovakia, with the steepest drops in Slovakia and Czech Republic (both -15 pp) and Bulgaria (-12 pp). Understanding why some countries increased and others decreased their support cannot be explained through individual-level or country-level factors alone. Therefore, this project aims to understand cross-national variation in LGBT+ rights support by considering both levels through a multilevel analytical framework.
+
+## Data and Analytical Strategy
+
+The analysis integrates two data sources. Individual-level data come from Special Eurobarometer 493 (wave 91.4, May 2019, N = 27,438, 28 EU member states). The dependent variable is derived from question QC15.1 — whether gay, lesbian, and bisexual people should have the same rights as heterosexual people. Individual-level predictors cover socio-demographic characteristics (age, gender, education, occupation, marital status, urban residence, social class, financial hardship), political orientation (left-right self-placement), religion and minority identity, and LGBT-specific variables (having LGBT+ friends, perceived discrimination, discrimination experience, anti-discrimination efficacy, online activism). Country-level data come from the V-Dem dataset (Maerz et al., 2025), filtered to 2019, providing measures of LGBT political power, freedom of expression, political polarisation, online hate speech, educational equality, and GDP per capita.
+
+Given the hierarchical structure of the data — individuals nested within countries — we adopt a multilevel framework using binomial GLMMs estimated with `lme4`. Three sequential models are estimated: a null random-intercept model, a random-intercept model with individual-level predictors, and a full model adding V-Dem macro indicators. The VPC is computed at each step. Prior to the multilevel analysis, separate quasi-binomial logistic regressions are estimated for each of the 28 countries to examine heterogeneity in individual-level effects and inspect whether country-level intercepts correlate with macro indicators before formally modelling these patterns.
+
+# Key Methodological Decisions
+
+**Binarisation of the dependent variable.** The original variable is measured on a four-point ordinal scale (1 = totally agree to 4 = totally disagree), with a fifth category for "don't know". The distribution is strongly skewed toward agreement, with the majority of respondents in category 1. We therefore transformed the variable into a binary indicator (1 = support, 0 = oppose), treating "don't know" as missing and excluding those cases, as they cannot be meaningfully assigned to either position. This enables the use of binomial logistic regression and GLMMs, well suited to the multilevel framework we adopt.
+
+**Missing data and imputation.** Although 98.2% of rows are complete, two variables contained spontaneous refusals treated as missing at random: left-right self-placement (`left_right`, 2,775 refusals coded 97) and social class (`social_class`, codes 6–8 recoded to NA). "Don't know" responses were retained as a valid category rather than imputed, as they carry substantive information. To select the best imputation method, we compared PMM, CART, and Random Forest using the `mice` package, evaluating each by how well the imputed distributions matched the originals. PMM was selected for both variables as it best preserved the original shape and central tendency. Five imputation datasets were generated and the first completed dataset was used for modelling.
+
+**Standardisation, factoring, and weights.** Continuous variables were standardised to z-scores using `scale()` to allow direct comparison of effect sizes. Categorical variables were converted to factors. Survey weights (`w1`) were applied throughout to ensure nationally representative estimates.
+
+# Empirical Findings
+
+```{r support-table, fig.pos="H"}
+merged_data_dummy |>
+  filter(isocntry %in% c("BG","CZ","DK","IE","HU","IT","HR","MT","SK")) |>
+  group_by(isocntry) |>
+  summarise(`Support (%)` = round(mean(lgbt_rights_dummy, na.rm = TRUE) * 100, 1)) |>
+  arrange(`Support (%)`) |>
+  mutate(Country = countrycode(isocntry, "iso2c", "country.name")) |>
+  dplyr::select(Country, `Support (%)`) |>
+  kable(caption = "LGBT+ rights support in the nine declining countries (2019)",
+        booktabs = TRUE) |>
+  kable_styling(latex_options = c("hold_position"), 
+                full_width = FALSE,
+                font_size = 9)
+```
+
+Table 1 shows the observed support rates for the nine declining countries in 2019. Slovakia and Bulgaria show the lowest support, consistent with the magnitude of their declines since 2015. Denmark and Ireland retain comparatively high rates despite their decline.
+
+**Per-country logistic models.** Before the multilevel models, separate quasi-binomial logistic regressions were estimated for each country to establish baseline intercepts and examine individual-level heterogeneity. The countries with the highest baseline support are Luxembourg, the Netherlands, and — surprisingly — Malta, given that the latter recorded a decline since 2015. Among the most relevant predictors, having LGBT+ friends and identifying as a sexual minority are consistently positive, while Muslim and Catholic religious affiliation and right-wing political orientation are consistently negative. Countries with positive intercepts tend to also display more favourable macro-level conditions, suggesting an alignment between individual-level openness and national structural context.
+
+```{r coeff-plot-friends, fig.cap="Effect of having LGBT+ friends on support by country. Red line = zero effect. Orange = nine declining countries.", fig.height=4, fig.width=5.5, fig.pos="H"}
+merged_data_nested <- merged_data_dummy |>
+  group_by(isocntry) |> nest()
+
+estimation <- merged_data_nested |>
+  mutate(
+    model = purrr::map(data,
+      ~ glm(lgbt_rights_dummy ~ age + gender + education +
+              occupation + religion + marital + urban +
+              social_class + fin_hardship + left_right + min_sexual +
+              lgbt_friends + discrim_percep + discrim_exp +
+              antidiscrim_eff + online_activism + mobile + internet +
+              sastisfaction + interview_size + cooperation,
+            data = .x, family = quasibinomial, weights = .x$w1)),
+    model.results = purrr::map(model, broom::tidy)
+  )
+
+coeff_plot_df <- estimation |>
+  unnest(model.results) |>
+  dplyr::select(isocntry, term, estimate, std.error) |>
+  mutate(ci_low  = estimate - 1.96 * std.error,
+         ci_high = estimate + 1.96 * std.error,
+         declining = isocntry %in% c("BG","CZ","DK","IE","HU","IT","HR","MT","SK"))
+
+coeff_plot_df |>
+  filter(term == "lgbt_friends") |>
+  ggplot(aes(x = estimate, y = reorder(isocntry, estimate), color = declining)) +
+  geom_point(size = 1.5) +
+  geom_errorbarh(aes(xmin = ci_low, xmax = ci_high), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "#D85A30"),
+                     labels = c("Other EU", "Declining countries")) +
+  labs(x = "Coefficient (log-odds)", y = NULL, color = NULL) +
+  theme_bw(base_size = 9) +
+  theme(legend.position = "bottom")
+```
+
+Figure 1 confirms that the effect of having LGBT+ friends is positive in virtually all countries, supporting the contact hypothesis. Among the nine declining countries, Hungary and Slovakia show among the strongest positive effects.
+
+**Multilevel models.**
+
+```{r model-table}
+vpc_rows <- tribble(
+  ~term, ~Null, ~`Individual-level`, ~Full,
+  "VPC", as.character(vpc_null), as.character(vpc_mod2), as.character(vpc_mod3)
+)
+
+modelsummary(
+  list("Null" = mod_null, "Individual-level" = mod2, "Full" = mod3),
+  exponentiate = FALSE,
+  stars = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
+  coef_omit = paste0("sd__|occupation|marital|urban|antidiscrim|interview|",
+                     "internet|sastisfaction|cooperation|opinion|voice|left_right[0-9]"),
+  gof_omit = "AIC|BIC|RMSE|Log|F|ICC|Num",
+  add_rows = vpc_rows,
+  coef_rename = c(
+    "age"                          = "Age",
+    "gender"                       = "Male",
+    "education2"                   = "Education: 16-19",
+    "education3"                   = "Education: 20+",
+    "social_class"                 = "Social class",
+    "fin_hardship"                 = "Financial hardship",
+    "min_sexual"                   = "Sexual minority",
+    "lgbt_friends"                 = "Has LGBT+ friends",
+    "discrim_percep"               = "Discrimination perception",
+    "discrim_exp"                  = "Discrimination experience",
+    "online_activism"              = "Online activism",
+    "mobile"                       = "Mobile phone",
+    "religionOrthodox"             = "Religion: Orthodox",
+    "religionMuslim"               = "Religion: Muslim",
+    "religionProtestant"           = "Religion: Protestant",
+    "religionOther Christian"      = "Religion: Other Christian",
+    "religionOther Religion"       = "Religion: Other Religion",
+    "religionAtheist/Non-believer" = "Religion: Atheist/Non-believer",
+    "lgbt_power"                   = "LGBT political power",
+    "gdp_pc"                       = "GDP per capita",
+    "free_expr"                    = "Freedom of expression",
+    "polarisation"                 = "Polarisation",
+    "hate_speech"                  = "Online hate speech",
+    "educ_equality"                = "Educational equality"
+  ),
+  title = "Multilevel models of LGBT+ rights support (selected predictors)",
+  notes = "SE in parentheses. * p<0.05, ** p<0.01, *** p<0.001. Ref: religion = Catholic, education = up to 15. Full results in Appendix A.",
+  output = "kableExtra",
+  fmt = 2
+) |>
+  kable_styling(
+    font_size = 7,
+    latex_options = c("hold_position", "scale_down"),
+    full_width = FALSE
+  )
+```
+
+The null model (VPC = 0.30) shows that 30% of total variation is attributable to country-level differences, confirming the multilevel framework is warranted. The average log-odds of support is 1.22 across all countries, equivalent to a 77% probability of support. After adding individual-level predictors (Model 2), the VPC drops to 0.18: having LGBT+ friends is the strongest predictor, followed by religion (Orthodox and Muslim respondents are significantly less supportive than Catholics; Atheists/Non-believers significantly more supportive), education, and gender (men less supportive than women). Sexual minorities are also significantly more likely to support equal rights. Model 3 introduces the six V-Dem macro indicators (VPC = 0.09), but only LGBT political power reaches significance — GDP per capita, freedom of expression, polarisation, educational equality, and hate speech all fail once individual composition is controlled.
+
+```{r caterpillar-plot, fig.cap="Country random intercepts from Model 3. Orange = nine declining countries. Red line = population mean.", fig.height=3.8, fig.width=5.5, fig.pos="H"}
+ggplot(country_effects,
+       aes(x = ran.int, y = reorder(isocntry, ran.int), color = declining)) +
+  geom_point(size = 1.8) +
+  geom_vline(xintercept = fixed_int, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "#D85A30"),
+                     labels = c("Other EU", "Declining countries")) +
+  labs(x = "Baseline log-odds of LGBT+ support", y = NULL, color = NULL) +
+  theme_bw(base_size = 9) +
+  theme(legend.position = "bottom")
+```
+
+```{r predicted-plots, fig.cap="Left: predicted probability of LGBT+ support by LGBT political power. Right: predicted probability by LGBT+ friends, conditioned on LGBT political power (mean ± 1 SD).", fig.height=3, fig.width=6, fig.pos="H"}
+p1 <- ggpredict(mod3, terms = "lgbt_power [all]") |>
+  plot() +
+  labs(x = "LGBT political power (std.)", y = "Pr(support)", title = NULL) +
+  theme_bw(base_size = 9)
+
+p2 <- ggpredict(mod3, terms = c("lgbt_friends", "lgbt_power [meansd]")) |>
+  plot() +
+  labs(x = "Has LGBT+ friends", y = "Pr(support)", title = NULL) +
+  theme_bw(base_size = 9)
+
+library(patchwork)
+p1 + p2
+```
+
+Figure 2 shows country random intercepts from Model 3. Spain (+1.29) and Sweden (+1.19) show the highest baseline support; Slovakia (-1.10), Estonia (-0.73), and Czech Republic (-0.65) the lowest. Figure 3 (left) confirms that predicted support rises consistently with LGBT political power, exceeding 85% at the highest levels. Figure 3 (right) shows that having LGBT+ friends has a consistent positive effect regardless of LGBT political power level — the slopes are parallel — confirming that contact and institutional representation operate as independent, cumulative mechanisms.
+
+# Discussion
+
+The central idea that motivated our investigation was to understand why 9 EU countries declined their support towards LGBT+ people between 2015 and 2019, against the general trend of rising acceptance. Nevertheless, there is not a single answer.
+
+The three hierarchical models show a progressive decomposition of variance. The null model showed that 30% of total variation of the acceptance rate is attributable to country-level differences, which justifies the multilevel framework. After adding the individual-level predictors in Model 2, the variation was compressed to 18%, showing that part of the national divergence was compositional: predictors such as having LGBT+ friends, religion and education have an impact. Model 3 reduced it further to 9%, but based mostly in only one predictor. Of the six country-level variables selected from V-Dem, only LGBT political power reached significance. Variables like GDP per capita, freedom of expression, polarization and educational equality did not have an impact when controlling by individual composition. Based on this evidence, what seems to matter the most for acceptance is whether LGBT groups hold institutionalized political voice.
+
+The nine countries do not follow a coherent pattern. Denmark and Ireland are above the EU mean in the final model's random intercepts, suggesting that their respective decline in support may be driven by country-specific factors outside the ones already studied. Hungary, Bulgaria, Croatia, Slovakia and Czech Republic show persistently negative intercepts that survive controls — likely related to dynamics our model cannot capture, such as political mobilization against LGBT rights or the institutional reach of religious organizations beyond what individual religiosity measures. Italy is in an intermediate position, closer to the EU mean, while Malta presents a puzzling case: its high baseline intercept in the per-country models is inconsistent with its declining support, suggesting the drop may be concentrated within specific population subgroups rather than reflecting a diffuse national trend.
+
+One finding that stands out across all nine countries is the role of interpersonal contact. Having LGBT+ friends is the strongest individual-level predictor in both Model 2 and Model 3, and the interaction plot shows that its effect does not vary with LGBT political power — meaning that contact and institutional representation work independently and accumulate. In countries where both are low, individuals are less likely to know LGBT+ people and less likely to live in contexts where LGBT+ identities are politically visible. This double disadvantage may help explain not only why decline is concentrated where it is, but also why it can become self-reinforcing over time.
+
+# References
+
+\setlength{\parindent}{-0.2in}
+\setlength{\leftskip}{0.2in}
+\noindent
+
+Maerz, Seraphine F., Amanda B. Edgell, Sebastian Hellemeier, Nina Illchenko, and Linnea Fox. 2025. *vdemdata: An R package to load, explore and work with the most recent V-Dem dataset*. https://github.com/vdeminstitute/vdemdata
+
+European Commission. 2019. *Special Eurobarometer 493: Discrimination in the EU*. GESIS Data Archive, Cologne. ZA7575.
+
+\newpage
+
+# Appendix A: Full Model Results
+
+```{r appendix-full-table}
+vpc_rows <- tribble(
+  ~term, ~Null, ~`Individual-level`, ~Full,
+  "VPC", as.character(vpc_null), as.character(vpc_mod2), as.character(vpc_mod3)
+)
+
+modelsummary(
+  list("Null" = mod_null, "Individual-level" = mod2, "Full" = mod3),
+  exponentiate = FALSE,
+  stars = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
+  coef_omit = "sd__",
+  gof_omit = "AIC|BIC|RMSE|Log|F|ICC|Num",
+  add_rows = vpc_rows,
+  coef_rename = c(
+    "age"                          = "Age",
+    "gender"                       = "Male",
+    "education2"                   = "Education: 16-19",
+    "education3"                   = "Education: 20+",
+    "education4"                   = "Education: still studying",
+    "education5"                   = "Education: no full-time",
+    "social_class"                 = "Social class",
+    "fin_hardship"                 = "Financial hardship",
+    "min_sexual"                   = "Sexual minority",
+    "lgbt_friends"                 = "Has LGBT+ friends",
+    "discrim_percep"               = "Discrimination perception",
+    "discrim_exp"                  = "Discrimination experience",
+    "online_activism"              = "Online activism",
+    "mobile"                       = "Mobile phone",
+    "religionOrthodox"             = "Religion: Orthodox",
+    "religionMuslim"               = "Religion: Muslim",
+    "religionProtestant"           = "Religion: Protestant",
+    "religionOther Christian"      = "Religion: Other Christian",
+    "religionOther Religion"       = "Religion: Other Religion",
+    "religionAtheist/Non-believer" = "Religion: Atheist/Non-believer",
+    "lgbt_power"                   = "LGBT political power",
+    "gdp_pc"                       = "GDP per capita",
+    "free_expr"                    = "Freedom of expression",
+    "polarisation"                 = "Polarisation",
+    "hate_speech"                  = "Online hate speech",
+    "educ_equality"                = "Educational equality"
+  ),
+  title = "Full multilevel model results",
+  notes = "SE in parentheses. * p<0.05, ** p<0.01, *** p<0.001. Ref: religion = Catholic, education = up to 15, marital = unmarried. VPC = Variance Partition Coefficient.",
+  output = "kableExtra",
+  fmt = 2
+) |>
+  kable_styling(
+    font_size = 7,
+    latex_options = c("hold_position", "scale_down"),
+    full_width = FALSE
+  )
+```
+
+# Appendix B: Country-Level Macro Predictors
+
+```{r scatter-lgbt-power, fig.cap="Country random intercepts vs. LGBT political power.", fig.height=3.8, fig.width=5.5}
+ggplot(country_macro,
+       aes(x = lgbt_power, y = ran.int, color = declining, label = isocntry)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "gray40",
+              linetype = "dashed", linewidth = 0.7) +
+  geom_label_repel(size = 2.5, box.padding = 0.3,
+                   show.legend = FALSE, max.overlaps = 20) +
+  geom_hline(yintercept = fixed_int, linetype = "dotted", color = "gray60") +
+  scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "#D85A30"),
+                     labels = c("Other EU", "Declining countries")) +
+  labs(x = "LGBT political power (std.)", y = "Country random intercept", color = NULL) +
+  theme_bw(base_size = 9) +
+  theme(legend.position = "bottom")
+```
+
+```{r scatter-gdp, fig.cap="Country random intercepts vs. GDP per capita.", fig.height=3.8, fig.width=5.5}
+ggplot(country_macro,
+       aes(x = gdp_pc, y = ran.int, color = declining, label = isocntry)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "gray40",
+              linetype = "dashed", linewidth = 0.7) +
+  geom_label_repel(size = 2.5, box.padding = 0.3,
+                   show.legend = FALSE, max.overlaps = 20) +
+  geom_hline(yintercept = fixed_int, linetype = "dotted", color = "gray60") +
+  scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "#D85A30"),
+                     labels = c("Other EU", "Declining countries")) +
+  labs(x = "GDP per capita (std.)", y = "Country random intercept", color = NULL) +
+  theme_bw(base_size = 9) +
+  theme(legend.position = "bottom")
+```
+
+```{r scatter-free-expr, fig.cap="Country random intercepts vs. freedom of expression.", fig.height=3.8, fig.width=5.5}
+ggplot(country_macro,
+       aes(x = free_expr, y = ran.int, color = declining, label = isocntry)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "gray40",
+              linetype = "dashed", linewidth = 0.7) +
+  geom_label_repel(size = 2.5, box.padding = 0.3,
+                   show.legend = FALSE, max.overlaps = 20) +
+  geom_hline(yintercept = fixed_int, linetype = "dotted", color = "gray60") +
+  scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "#D85A30"),
+                     labels = c("Other EU", "Declining countries")) +
+  labs(x = "Freedom of expression (std.)", y = "Country random intercept", color = NULL) +
+  theme_bw(base_size = 9) +
+  theme(legend.position = "bottom")
+```
